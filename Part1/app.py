@@ -2235,40 +2235,282 @@ def render_topic_detail(snapshot: dict) -> None:
             doc_card(comment, label="Representative comment")
 
 
-def render_methods(snapshot: dict) -> None:
-    if not snapshot["methods"]["sections"]:
-        st.info("Methods content will appear here after the pipeline artifacts are available.")
-        return
+METHODS_SUBPAGES = [
+    ("Data Acquisition", "p1_acquisition"), ("Feature Prep", "p1_features"),
+    ("Topic Modeling", "p1_topics"), ("Trend Rules", "p1_trends"), ("Stance Analysis", "p1_stance"),
+    ("RAG Architecture", "p2_rag"), ("Chunking", "p2_chunks"), ("Embeddings", "p2_embeddings"),
+    ("Retrieval", "p2_retrieval"), ("Query Routing", "p2_routing"), ("Generation", "p2_generation"),
+    ("RAG Evaluation", "p2_eval"), ("Hindi Task", "p2_hindi"),
+]
 
-    methods = snapshot["methods"]
-    render_section_intro(
-        "Methods",
-        "Collection, modeling, stance analysis, and interpretation choices.",
-    )
-    for index, section in enumerate(methods["sections"], start=1):
-        items_html = "".join(f"<li>{html.escape(item)}</li>" for item in section["items"])
-        st.markdown(
-            f"""
-            <div class="method-row">
-                <div class="method-index">{index}</div>
-                <div>
-                    <div class="method-title">{html.escape(section['title'])}</div>
-                    <ul class="method-list">{items_html}</ul>
-                </div>
+
+def _method_block(title: str, items: list) -> None:
+    items_html = "".join(f"<li>{html.escape(str(i))}</li>" for i in items)
+    st.markdown(f'<div class="method-row"><div></div><div><div class="method-title">{html.escape(title)}</div><ul class="method-list">{items_html}</ul></div></div>', unsafe_allow_html=True)
+
+
+def _method_table(title: str, rows: list) -> None:
+    rows_html = "".join(f'<tr><td class="risk-name">{html.escape(str(k))}</td><td>{html.escape(str(v))}</td></tr>' for k, v in rows)
+    st.markdown(f'<div class="section-shell"><div class="method-title" style="margin-bottom:0.5rem">{html.escape(title)}</div><table class="risk-matrix"><thead><tr><th>Item</th><th>Detail</th></tr></thead><tbody>{rows_html}</tbody></table></div>', unsafe_allow_html=True)
+
+
+def _msub_acquisition() -> None:
+    render_section_intro("Data Acquisition", "How r/fitness posts and comments were collected and stored.")
+    _method_block("Source", ["Arctic Shift archive is used instead of PRAW because the project cannot rely on Reddit's official API access path.", "Posts are fetched in ascending date order from an aggregate-identified valid r/fitness date window.", "Both raw JSON payloads and normalized fields are stored in SQLite."])
+    _method_block("Ingestion", ["Paginated fetches with checkpointing, backoff/retry, and idempotent upserts keyed by Reddit IDs.", "Comment ingestion preserves link_id and parent_id for thread structure.", "Deleted/removed content is stored but excluded from NLP modeling."])
+    _method_block("Corpus Windows", ["Default-safe window: 2023-04-01 to 2024-05-01 — 19,320 posts, 288,453 comments.", "Advisory 2018 window (Jun–Aug 2018) stored but not trusted for RAG.", "Full database: 40,520 posts · 434,530 comments · 80,038 authors · 475,050 documents."])
+    _method_table("SQLite Schema", [("posts", "Post fields, raw JSON, raw/clean text, scores, URLs, deletion flags"), ("comments", "Comment text, parent/post links, scores, depth, raw JSON"), ("documents", "Unified post/comment table with stable document_id"), ("documents_fts", "FTS5 index for lexical retrieval"), ("authors", "Usernames, pseudonyms, bot/deletion flags"), ("topic_definitions", "Labels, keywords, share, trend label, representatives"), ("comment_stances", "Stance labels for topic-specific comments"), ("pipeline_checkpoints", "Stage status and payloads")])
+
+
+def _msub_features() -> None:
+    render_section_intro("Feature Preparation", "Filtering and cleaning rules for the topic model corpus.")
+    _method_block("Post Filters", ["Posts must not be deleted or removed.", "Posts must have ≥20 cleaned characters.", "Result: 861 model-ready posts from 19,320."])
+    _method_block("Comment Filters", ["Must not be deleted/removed or by a probable bot (29 bots identified).", "Must have ≥40 cleaned characters and ≥8 tokens.", "Result: 219,087 model-ready from 288,453."])
+    _method_block("Text Cleaning", ["raw_text and clean_text kept side by side.", "Cleaning removes markdown noise, URLs, and boilerplate.", "AutoModerator excluded from NLP only — database counts are unaffected."])
+
+
+def _msub_topics(snapshot: dict) -> None:
+    render_section_intro("Topic Modeling", "How 8 topics were discovered from a hybrid post+comment corpus.")
+    _method_block("Approach", ["TF-IDF features → TruncatedSVD + normalization → BERTopic-style model with KMeans.", "Target: 8 human-facing topics, within the required 5–20 range.", "Assignment source: bertopic_hybrid_top_level_comments_v1."])
+    _method_block("Hybrid Corpus", ["r/fitness is megathread-driven — comments carry most semantic signal.", "861 model-ready posts + 3,220 bounded top-level comments = 4,081 modeled documents.", "Comments ranked by score within each post, top 3 per post, then global cap. Posts never squeezed out."])
+    _method_block("Label Review", ["Each topic's top 10 keywords reviewed; autogenerated labels renamed only if misleading.", "Single light manual pass — not full manual annotation."])
+
+
+def _msub_trends() -> None:
+    render_section_intro("Trend Classification", "Deterministic rules for trending, persistent, or mixed labels.")
+    _method_block("Rules", ["Persistent: topic in ≥75% of months AND peak-to-median ≤ 1.75.", "Trending: peak-to-median ≥ 2.5 (concentrated spike).", "Mixed: neither condition strong enough."])
+    _method_block("Implementation", ["Monthly topic share computed from the hybrid document corpus.", "Coverage ratio and peak-to-median stored per topic.", "Rules are objective, explainable, and match the modeling unit."])
+
+
+def _msub_stance(snapshot: dict) -> None:
+    render_section_intro("Stance Analysis", "Unsupervised clustering to surface agreement/disagreement patterns.")
+    _method_block("Scope", ["Runs only for major topics (post share above a fixed minimum).", "Currently validated for topics 1 (Weight/Fat/Calories), 2 (Gym/Rant), and 5 (Bench/Press/Sets)."])
+    _method_block("Method", ["Topic-specific comments clustered into 2 camps via TF-IDF + KMeans.", "Larger upvote-weighted cluster = provisional dominant position.", "Comments classified by nearest centroid prototype."])
+    _method_block("Guardrails", ["Two-sided summaries shown only when minority cluster exceeds minimum support.", "Weak/overlapping splits use cautious wording — all 3 current outputs are 'Cautious support/opposition'.", "Known limitation: can over-separate near-consensus topics or miss subtle rhetorical differences."])
+
+
+def _msub_rag_arch() -> None:
+    render_section_intro("RAG System Architecture", "End-to-end retrieval-augmented generation over the frozen r/fitness corpus.")
+    st.markdown("""
+    <div class="methods-diagram rag-arch-diagram">
+        <div class="rag-arch-title">RAG Pipeline Architecture</div>
+        <div class="rag-arch-grid">
+            <div class="rag-arch-col">
+                <div class="rag-arch-phase">Offline Index Build</div>
+                <div class="md-node md-src" style="width:100%">Part 1 SQLite<br><span>475,050 documents</span></div>
+                <div class="md-arrow-v">↓</div>
+                <div class="md-node" style="width:100%">Corpus Freeze<br><span>307,773 docs (2023–2024)</span></div>
+                <div class="md-arrow-v">↓</div>
+                <div class="md-node" style="width:100%">Chunk Generation<br><span>313,615 chunks</span></div>
+                <div class="md-arrow-v">↓</div>
+                <div class="md-node" style="width:100%">MiniLM-L6-v2 Embedding<br><span>384-dim vectors</span></div>
+                <div class="md-arrow-v">↓</div>
+                <div class="md-node md-out" style="width:100%">FAISS Dense Index</div>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            <div class="rag-arch-divider"></div>
+            <div class="rag-arch-col">
+                <div class="rag-arch-phase">Online Query Path</div>
+                <div class="md-node md-src" style="width:100%">User Query</div>
+                <div class="md-arrow-v">↓</div>
+                <div class="md-node" style="width:100%">Normalize + Expand Abbreviations</div>
+                <div class="md-arrow-v">↓</div>
+                <div class="md-node" style="width:100%">Classify Query<br><span>factual / opinion / adversarial</span></div>
+                <div class="md-arrow-v">↓</div>
+                <div class="rag-arch-split">
+                    <div class="md-node">Dense<br><span>FAISS</span></div>
+                    <div class="rag-arch-plus">+</div>
+                    <div class="md-node">Lexical<br><span>FTS5</span></div>
+                </div>
+                <div class="md-arrow-v">↓</div>
+                <div class="md-node" style="width:100%">RRF Merge + Dedup<br><span>k=60</span></div>
+                <div class="md-arrow-v">↓</div>
+                <div class="md-node" style="width:100%">Grounded Prompt<br><span>Source labels S1…Sn</span></div>
+                <div class="md-arrow-v">↓</div>
+                <div class="rag-arch-split">
+                    <div class="md-node md-out">Groq<br><span>llama-3.3-70b</span></div>
+                    <div class="rag-arch-or">or</div>
+                    <div class="md-node md-out">Gemini<br><span>gemini-2.5-flash</span></div>
+                </div>
+                <div class="md-arrow-v">↓</div>
+                <div class="md-node md-src" style="width:100%">JSON Answer + Citations</div>
+            </div>
+        </div>
+        <div class="rag-arch-note">Adversarial queries bypass the LLM via a deterministic abstention path.</div>
+    </div>
+    """, unsafe_allow_html=True)
+    _method_block("Design Decisions", ["Part 2 treats Part 1 as read-only input.", "Corpus frozen before retrieval/evaluation work begins.", "Retrieval and generation are separate: retrieval finds evidence, generation cites it.", "Two LLM endpoints share the same retrieval pipeline for fair comparison."])
 
-    render_section_intro(
-        "Interpretation Notes",
-        "Caveats that keep the corpus claims appropriately narrow.",
+
+def _msub_chunks() -> None:
+    render_section_intro("Chunking Pipeline", "How 307,773 documents become 313,615 retrieval-ready chunks.")
+    _method_block("Rules", ["Comments stay as single chunks unless exceeding max size (220 tokens).", "Posts split by paragraph first, then by sentence.", "Adjacent post chunks use 1-sentence overlap (~20–30 tokens).", "URL-only documents produce deterministic fallback chunks (874 total)."])
+    _method_table("Coverage Summary", [("Source documents", "307,773"), ("Documents represented", "307,773 (100%)"), ("Total chunks", "313,615"), ("Empty chunks", "0"), ("Fallback chunks", "874")])
+    _method_block("Chunk Schema", ["Fields: chunk_id, document_id, source_type, source_id, post_id, parent_id, link_id, created_utc, author_id, title, chunk_text, chunk_index, token_estimate.", "Metadata preserved for exact citation of original post/comment.", "Source contract follows the frozen corpus manifest directly."])
+
+
+def _msub_embeddings() -> None:
+    render_section_intro("Embeddings & FAISS", "Vectorizing chunks and building the dense retrieval index.")
+    _method_table("Embedding Config", [("Model", "sentence-transformers/all-MiniLM-L6-v2"), ("Dimension", "384"), ("Batch size", "128"), ("Total embeddings", "313,615"), ("Index type", "FAISS dense"), ("Store", "Resumable SQLite artifact")])
+    _method_block("Preflight Checks", ["Hashes frozen chunk JSONL and manifest.", "Checks manifest count matches JSONL line count.", "Rejects duplicate chunk_ids.", "Verifies authoritative expected count (313,615) before any work."])
+    _method_block("Resumability", ["Embeddings stored incrementally in SQLite.", "Resume only if chunk hash, model, dimension, and batch size all match.", "FAISS index built after all embeddings complete."])
+
+
+def _msub_retrieval() -> None:
+    render_section_intro("Retrieval Layer", "Dense, lexical, and hybrid retrieval with Reciprocal Rank Fusion.")
+    st.markdown(
+        '<div class="methods-diagram">'
+        '<div class="rag-arch-title">Hybrid Retrieval Flow</div>'
+        '<div style="display: flex; gap: 2rem; justify-content: center;">'
+        '<div class="rag-arch-col" style="flex: 1;">'
+        '<div class="md-node md-src" style="width: 100%;">Query<br><span>embedded</span></div>'
+        '<div class="md-arrow-v">&#x2193;</div>'
+        '<div class="md-node" style="width: 100%;">Dense / FAISS<br><span>top-k nearest</span></div>'
+        '</div>'
+        '<div class="rag-arch-col" style="flex: 1;">'
+        '<div class="md-node md-src" style="width: 100%;">Query<br><span>text</span></div>'
+        '<div class="md-arrow-v">&#x2193;</div>'
+        '<div class="md-node" style="width: 100%;">Lexical / FTS5<br><span>BM25-style</span></div>'
+        '</div>'
+        '</div>'
+        '<div class="rag-arch-split" style="margin: 0.8rem 0 0.5rem 0;">'
+        '<div class="rag-arch-plus">+</div>'
+        '</div>'
+        '<div class="md-flow" style="justify-content:center">'
+        '<div class="md-node md-out" style="width: 100%; max-width: 25rem;">RRF Merge &#x2192; Dedup by document_id &#x2192; Final top-k</div>'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
     )
-    notes_html = "".join(
-        f'<div class="note-card"><div class="subtle-text">{html.escape(note)}</div></div>'
-        for note in methods["notes"]
-    )
-    st.markdown(f'<div class="note-grid">{notes_html}</div>', unsafe_allow_html=True)
+    _method_table("Retrieval Parameters", [("Dense top-k", "8"), ("Lexical top-k", "8"), ("Hybrid final top-k", "5"), ("RRF constant", "60"), ("Factual final top-k", "7"), ("Opinion dense/lexical", "14 each"), ("Opinion final top-k", "7"), ("Adversarial dense/lexical", "4 each"), ("Adversarial final top-k", "3")])
+    _method_block("Lexical Mapping", ["Lexical retrieval is document-level via Part 1 FTS5.", "Multi-chunk documents map to first chunk by ascending chunk_index.", "Hybrid keeps best dense chunk when available, falls back to lexical default."])
+
+
+def _msub_routing() -> None:
+    render_section_intro("Query Classification & Routing", "Deterministic rule-based routing with abbreviation expansion.")
+    _method_block("Query Classes", ["factual — balanced hybrid, moderate top-k.", "opinion-summary — larger candidate pools and top-k.", "adversarial/no-answer — smaller pool, guardrail fields for abstention."])
+    _method_table("Abbreviation Map", [("ppl", "push pull legs"), ("5x5", "five by five strength program"), ("1rm", "one rep max"), ("pr", "personal record"), ("bw", "bodyweight"), ("rpe", "rate of perceived exertion"), ("tdee", "total daily energy expenditure"), ("bmr", "basal metabolic rate")])
+    _method_block("Logic", ["Router normalizes query → expands abbreviations → classifies → selects retrieval defaults → calls retrieval.", "Concept terms appended for maintenance calories, warmups, recomp when rules fire.", "Classification is deterministic and rule-based, not model-based."])
+
+
+def _msub_generation() -> None:
+    render_section_intro("Answer Generation", "Grounded prompting with source labels and structured JSON output.")
+    _method_block("Providers", ["Groq: llama-3.3-70b-versatile", "Gemini: gemini-2.5-flash", "Both return the same structured output shape."])
+    _method_block("Prompt Contract", ["Query-type-aware prompt inserts retrieved snippets with labels S1, S2, etc.", "Model must cite only those source labels.", "Model must state when evidence is missing.", "Adversarial queries bypass the provider via deterministic abstention."])
+    _method_block("Answer Contract", ['answer_text: grounded answer text', 'citations: ["S1", "S3", ...]', 'insufficient_evidence: true/false'])
+    _method_block("Validation", ["Substantive answers must have citations.", "Citations must refer only to retrieved source labels.", "Raw provider responses persisted for debugging."])
+
+
+def _msub_eval() -> None:
+    render_section_intro("RAG Evaluation", "Frozen 15-question eval set with automatic and manual metrics.")
+    _method_block("Evaluation Set", ["15 question-answer pairs based on the actual r/fitness corpus.", "8 factual · 5 opinion-summary · 2 adversarial/no-answer.", "Frozen before meaningful prompt tuning."])
+    _method_block("Automatic Metrics", ["ROUGE-L F1", "BERTScore (distilbert-base-uncased)", "Retrieval hit rate (Hit@k)"])
+    _method_block("Manual Review", ["Every output reviewed for faithfulness.", "Adversarial answers checked for correct abstention.", "Citation validity verified against retrieved sources.", "Error taxonomy: retrieval miss, citation miss, hallucination, incomplete summary, overgeneralization."])
+
+
+def _msub_hindi() -> None:
+    render_section_intro("Hindi Translation Task", "English/code-mixed r/fitness text → natural Hindi translation.")
+    _method_block("Dataset", ["20 examples: 4 RAG eval questions, 9 gold-answer summaries, 7 edge-case probes.", "Difficult tags: code-mixed, Reddit slang, fitness slang, named entities, abbreviations.", "Includes PPL, TDEE, BMR, PR, 5x5, StrongLifts, OP, natty, cope, bulk, cut, recomp."])
+    _method_block("Automatic Metrics", ["chrF (character n-gram F-score)", "Multilingual BERTScore (bert-base-multilingual-cased)"])
+    _method_block("Manual Review", ["8 difficult examples per provider manually scored for fluency and adequacy.", "Edge-case analysis on code-mixed and slang-heavy inputs."])
+
+
+def render_methods(snapshot: dict) -> None:
+    render_section_intro("Methods", "Every major pipeline step from Part 1 and Part 2 is documented below. Select a task.")
+
+    if "methods_sub" not in st.session_state:
+        st.session_state.methods_sub = None
+
+    st.markdown('<div class="eyebrow">Part 1 / Corpus Pipeline</div>', unsafe_allow_html=True)
+    p1_cols = st.columns(5, gap="medium")
+    for col, (label, key) in zip(p1_cols, METHODS_SUBPAGES[:5]):
+        with col:
+            btype = "primary" if st.session_state.methods_sub == key else "secondary"
+            if st.button(label, key=f"msub_{key}", use_container_width=True, type=btype):
+                st.session_state.methods_sub = key
+                st.rerun()
+
+    st.markdown('<div class="eyebrow" style="margin-top:0.6rem">Part 2 / RAG + Evaluation</div>', unsafe_allow_html=True)
+    p2a = st.columns(4, gap="medium")
+    for col, (label, key) in zip(p2a, METHODS_SUBPAGES[5:9]):
+        with col:
+            btype = "primary" if st.session_state.methods_sub == key else "secondary"
+            if st.button(label, key=f"msub_{key}", use_container_width=True, type=btype):
+                st.session_state.methods_sub = key
+                st.rerun()
+    p2b = st.columns(4, gap="medium")
+    for col, (label, key) in zip(p2b, METHODS_SUBPAGES[9:13]):
+        with col:
+            btype = "primary" if st.session_state.methods_sub == key else "secondary"
+            if st.button(label, key=f"msub_{key}", use_container_width=True, type=btype):
+                st.session_state.methods_sub = key
+                st.rerun()
+
+    st.markdown('<div style="border-top:2px solid var(--line-strong);margin:1.2rem 0 0.8rem 0"></div>', unsafe_allow_html=True)
+
+    sub = st.session_state.methods_sub
+    dispatch = {
+        "p1_acquisition": _msub_acquisition, "p1_features": _msub_features,
+        "p1_topics": lambda: _msub_topics(snapshot), "p1_trends": _msub_trends,
+        "p1_stance": lambda: _msub_stance(snapshot), "p2_rag": _msub_rag_arch,
+        "p2_chunks": _msub_chunks, "p2_embeddings": _msub_embeddings,
+        "p2_retrieval": _msub_retrieval, "p2_routing": _msub_routing,
+        "p2_generation": _msub_generation, "p2_eval": _msub_eval, "p2_hindi": _msub_hindi,
+    }
+    if sub and sub in dispatch:
+        dispatch[sub]()
+    else:
+        # Landing page with pipeline diagrams
+        st.markdown('<div class="methods-landing-text">Select any task above to view its methodology, design decisions, and implementation details.</div>', unsafe_allow_html=True)
+        render_section_intro("Part 1 Pipeline", "From raw Reddit data to interactive analysis.")
+        st.markdown("""
+        <div class="methods-diagram">
+            <div class="md-flow">
+                <div class="md-node md-src">Arctic Shift<br><span>Post/comment archive</span></div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">SQLite<br><span>Raw + clean text</span></div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">Feature Prep<br><span>Model flags</span></div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">Topic Model<br><span>BERTopic / KMeans</span></div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">Stance<br><span>Cluster &amp; label</span></div>
+            </div>
+            <div class="md-flow" style="margin-top:0.5rem;justify-content:center"><div class="md-arrow" style="transform:rotate(90deg)">↓</div></div>
+            <div class="md-flow" style="justify-content:center"><div class="md-node md-out">App Cache → Streamlit</div></div>
+        </div>
+        """, unsafe_allow_html=True)
+        render_section_intro("Part 2 Pipeline", "From frozen corpus to grounded answers.")
+        st.markdown("""
+        <div class="methods-diagram">
+            <div class="md-flow">
+                <div class="md-node md-src">Frozen Corpus<br><span>307,773 docs</span></div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">Chunking<br><span>313,615 chunks</span></div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">Embeddings<br><span>MiniLM-L6-v2</span></div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">FAISS<br><span>384-dim dense</span></div>
+            </div>
+            <div class="md-flow" style="margin-top:0.5rem;justify-content:center"><div class="md-arrow" style="transform:rotate(90deg)">↓</div></div>
+            <div class="md-flow">
+                <div class="md-node md-src">User Query</div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">Classify &amp; Route</div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">Hybrid Retrieval<br><span>Dense + FTS + RRF</span></div>
+                <div class="md-arrow">→</div>
+                <div class="md-node">Grounded Prompt</div>
+                <div class="md-arrow">→</div>
+                <div class="md-node md-out">Groq / Gemini</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        methods = snapshot.get("methods", {})
+        notes = methods.get("notes", [])
+        if notes:
+            render_section_intro("Interpretation Notes", "Caveats that keep the corpus claims appropriately narrow.")
+            notes_html = "".join(f'<div class="note-card"><div class="subtle-text">{html.escape(note)}</div></div>' for note in notes)
+            st.markdown(f'<div class="note-grid">{notes_html}</div>', unsafe_allow_html=True)
 
 
 def render_rag_chat() -> None:
@@ -3133,7 +3375,8 @@ def main() -> None:
         return
 
     is_part2 = st.session_state.page in PART2_PAGES
-    updated_cache_key = render_page_header(snapshot, available_caches, st.session_state.cache_key, st.session_state.page, show_era_selector=not is_part2)
+    hide_era = is_part2 or st.session_state.page == "Methods"
+    updated_cache_key = render_page_header(snapshot, available_caches, st.session_state.cache_key, st.session_state.page, show_era_selector=not hide_era)
     if updated_cache_key != st.session_state.cache_key:
         st.session_state.cache_key = updated_cache_key
         snapshot = load_dashboard_snapshot(st.session_state.cache_key)
