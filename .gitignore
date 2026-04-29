@@ -1,0 +1,40 @@
+.DS_Store
+
+# Secrets and local config
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+.python-version
+.venv/
+.venv*/
+venv/
+3.12/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.streamlit/
+*.py[cod]
+
+# Project data and generated artifacts
+Part1/data/
+Part1/artifacts/
+Part1/logs/
+Part2/data/
+tmp/
+
+# Local writeups not included in submission repo
+final_project_documentation.tex
+frontend-design.md
+
+# Databases and large generated files
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+
+# Generated PDFs
+NLP_proj_1.pdf
+NLP_proj_2.pdf

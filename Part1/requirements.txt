@@ -1,0 +1,16 @@
+bertopic==0.16.4
+faiss-cpu==1.8.0.post1
+google-genai==1.73.1
+groq==1.2.0
+hdbscan==0.8.40
+numpy==1.26.4
+pandas==2.2.2
+plotly==5.24.1
+python-dateutil==2.9.0.post0
+requests==2.32.3
+scikit-learn==1.5.2
+sentence-transformers==3.0.1
+streamlit==1.39.0
+tenacity==9.0.0
+tqdm==4.66.5
+umap-learn==0.5.6
